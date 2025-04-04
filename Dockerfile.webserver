@@ -1,47 +1,54 @@
-FROM python:3.11 AS server
-
-# Port the web server runs on
-ENV SWARM_UI_PORT=8000
-
-# List of peers to pair with (e.g., "/ip4/127.0.0.1/tcp/8001,/ip4/127.0.0.1/tcp/8002")
-ENV INITIAL_PEERS=""
-
-WORKDIR /app
-
-COPY ./web/requirements.txt .
-
-RUN pip install --no-cache-dir -r requirements.txt
-
-RUN opentelemetry-bootstrap -a install
-
-# Seems to be necessary with hivemind.
-RUN pip install --upgrade protobuf
-
-# OpenTelemetry environment variables
-ENV OTEL_SERVICE_NAME=""
-ENV OTEL_EXPORTER_OTLP_ENDPOINT=""
-ENV OTEL_PYTHON_LOG_LEVEL=info
-
-COPY ./web/api ./api
-
-# Copies only the needed files from hivemind for the server to run.
-COPY ./hivemind_exp/*_utils.py ./hivemind_exp/__init__.py ./hivemind_exp/
-COPY ./hivemind_exp/contracts/*.json ./hivemind_exp/contracts/
-
-FROM node:22 AS frontend
+# Build UI stage
+FROM node:18-alpine as ui-builder
 
 WORKDIR /ui
-
-COPY web/ui/package.json web/ui/package-lock.json ./
-
+COPY web/ui/package*.json ./
 RUN npm install
 
 COPY web/ui ./
-
 RUN npm run build:testnet
 
-FROM server AS final
+# Build server stage
+FROM python:3.11-slim as server
 
-COPY --from=frontend /ui/dist /app/ui/dist
+WORKDIR /app
 
-CMD ["opentelemetry-instrument", "python", "-m", "api.server"]
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY ./web/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN opentelemetry-bootstrap -a install
+RUN pip install --upgrade protobuf
+
+# Copy necessary files
+COPY ./web/api ./api
+COPY ./hivemind_exp/*_utils.py ./hivemind_exp/
+COPY ./hivemind_exp/__init__.py ./hivemind_exp/
+COPY ./hivemind_exp/contracts/*.json ./hivemind_exp/contracts/
+
+# Copy built UI from ui-builder stage
+COPY --from=ui-builder /ui/dist ./ui/dist
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV OTEL_SERVICE_NAME=rlswarm-fastapi
+ENV OTEL_TRACES_EXPORTER=otlp
+ENV OTEL_METRICS_EXPORTER=otlp
+ENV OTEL_LOGS_EXPORTER=otlp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/api/healthz || exit 1
+
+# Expose port
+EXPOSE 8000
+
+# Start FastAPI with OpenTelemetry
+CMD ["opentelemetry-instrument", "uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8000"]

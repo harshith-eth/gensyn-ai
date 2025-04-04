@@ -51,26 +51,32 @@ python3 -m venv .venv
 # For Mac/Linux:
 source .venv/bin/activate
 
-# Install Node.js (if not installed)
-npm install -g node@latest
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-### 2. Docker Setup
+### 2. Docker Setup & Running
 ```bash
-# Start Docker Desktop
-# Verify Docker is running
+# Ensure Docker Desktop is running
 docker --version
 docker-compose --version
-```
 
-### 3. Launch the System
-```bash
-# Start the training system
-./run_rl_swarm.sh
-
-# In a separate terminal, start the UI
+# Start all services
 docker-compose up --build
+
+# To run in background (detached mode)
+docker-compose up --build -d
+
+# To stop services
+docker-compose down
 ```
+
+### 3. Accessing the System
+- Login Interface: http://localhost:3000
+- Training Interface: http://localhost:8080
+- Metrics Dashboard: http://localhost:55679
+
+Note: The system will continue running in Docker even if you close your terminal, as long as Docker Desktop is running.
 
 ## 📚 Detailed Setup Instructions
 
@@ -103,7 +109,36 @@ netstat -ano | findstr "3000 3001 3002 8080"
 
 # Kill processes if needed
 taskkill /F /PID <process_id>
+
+# Alternative: Use different ports in docker-compose.yml
+ports:
+  - "3001:3000"  # Maps host port 3001 to container port 3000
 ```
+
+### Docker Management
+```bash
+# View running containers
+docker ps
+
+# View container logs
+docker logs rl-swarm-main-fastapi-1
+docker logs rl-swarm-main-modal-login-1
+
+# Stop all containers
+docker-compose down
+
+# Clean up system
+docker system prune -f  # Removes unused containers/images
+
+# Restart specific service
+docker-compose restart fastapi
+```
+
+### System Persistence
+- Docker containers will continue running in background even if terminal is closed
+- To stop all services: Use Docker Desktop or run `docker-compose down`
+- Data persists in Docker volumes between restarts
+- Login state is maintained in browser session
 
 ### Login Issues
 | Issue | Solution |
@@ -155,21 +190,21 @@ RL Swarm
 
 ## 📊 Monitoring & Metrics
 
-### Available Metrics
-- Training rewards
-- Round/Stage progress
-- Node connectivity
-- Peer count
-- Training speed
+### Available Endpoints
+- Training Interface: http://localhost:8080
+- Login System: http://localhost:3000
+- Metrics Dashboard: http://localhost:55679
+- Health Check: http://localhost:8080/health
 
-### Health Checks
+### Docker Container Status
 ```bash
-# Check system health
-curl http://localhost:8080/health
-curl http://localhost:3000/health
-
-# Monitor Docker containers
+# View container status
 docker ps
+
+# View container logs
+docker logs -f <container_name>
+
+# Monitor resource usage
 docker stats
 ```
 
@@ -205,3 +240,213 @@ export CUDA_VISIBLE_DEVICES=0  # Use GPU 0
 2. Stop Docker containers
 3. Backup important files
 4. Deactivate virtual environment
+
+## 🚨 Known Issues & Solutions
+
+### OpenTelemetry Collector Issues
+```bash
+# Common Error: "logging exporter has been deprecated"
+# Solution: Update otel-collector-config.yaml to use debug exporter:
+exporters:
+  debug:
+    verbosity: detailed
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+
+# Verify collector is running
+docker logs rl-swarm-main-otel-collector-1
+```
+
+### FastAPI UI Assets Error
+```bash
+# Error: "Directory '/app/ui/dist/assets' does not exist"
+# Solutions:
+1. Rebuild the UI assets:
+cd web/ui
+npm install
+npm run build:testnet
+
+2. Verify in Dockerfile.webserver:
+COPY --from=ui-builder /ui/dist ./ui/dist
+
+3. Clean and rebuild:
+docker-compose down
+docker system prune -f
+docker-compose up --build
+```
+
+### Protobuf Version Warnings
+```bash
+# Warning: "Protobuf gencode version mismatch"
+# Solution: Update protobuf in requirements.txt:
+protobuf>=6.30.2
+
+# Then rebuild:
+docker-compose build fastapi
+```
+
+### Port Conflict Resolution Guide
+1. **Check Port Usage**
+```bash
+# Windows
+netstat -ano | findstr "3000 3001 3002 8080"
+taskkill /F /PID <PID>
+
+# Linux/Mac
+lsof -i :3000,3001,3002,8080
+kill -9 <PID>
+```
+
+2. **Alternative Port Configuration**
+```yaml
+# In docker-compose.yml
+services:
+  modal-login:
+    ports:
+      - "3001:3000"  # Use 3001 if 3000 is taken
+  fastapi:
+    ports:
+      - "8081:8080"  # Use 8081 if 8080 is taken
+```
+
+## 🔄 Service Management
+
+### Starting Services
+```bash
+# Option 1: Interactive mode (see logs in terminal)
+docker-compose up --build
+
+# Option 2: Detached mode (runs in background)
+docker-compose up --build -d
+
+# Option 3: Start specific services
+docker-compose up -d fastapi
+docker-compose up -d modal-login
+```
+
+### Monitoring Services
+```bash
+# View all logs
+docker-compose logs -f
+
+# View specific service logs
+docker-compose logs -f fastapi
+docker-compose logs -f modal-login
+
+# Check container health
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
+### Troubleshooting Steps
+1. **Clean Start**
+```bash
+# Stop all containers
+docker-compose down
+
+# Remove all containers and volumes
+docker-compose down -v
+
+# Clean Docker system
+docker system prune -f
+
+# Rebuild from scratch
+docker-compose up --build
+```
+
+2. **Service-Specific Issues**
+```bash
+# Restart individual service
+docker-compose restart fastapi
+
+# Rebuild single service
+docker-compose build fastapi
+docker-compose up -d fastapi
+
+# Check service logs
+docker logs -f rl-swarm-main-fastapi-1
+```
+
+## 📝 Development Tips
+
+### Local Development
+1. **UI Development**
+```bash
+cd web/ui
+npm install
+npm run dev  # Hot-reload development
+npm run build:testnet  # Production build
+```
+
+2. **API Development**
+```bash
+cd web
+pip install -r requirements.txt
+uvicorn api.server:app --reload --port 8080
+```
+
+### Testing
+```bash
+# Run UI tests
+cd web/ui
+npm test
+
+# Run API tests
+cd web
+pytest
+```
+
+### Common Development Tasks
+1. **Update Dependencies**
+```bash
+# UI dependencies
+cd web/ui
+npm update
+
+# Python dependencies
+pip install --upgrade -r requirements.txt
+```
+
+2. **Debug Mode**
+```bash
+# Enable debug logging
+export DEBUG=1
+export LOG_LEVEL=debug
+
+# Run with debug options
+docker-compose -f docker-compose.debug.yml up
+```
+
+## 🔐 Security Notes
+
+### API Keys & Secrets
+- Store Hugging Face token in `.env` file (optional)
+- Never commit `.env` files
+- Use environment variables in Docker Compose
+
+### Data Persistence
+- Important files to backup:
+  - `swarm.pem` (node identity)
+  - `userData.json` (auth data)
+  - Docker volumes (training data)
+
+## 📊 Performance Optimization
+
+### Resource Usage
+```bash
+# Monitor resource usage
+docker stats
+
+# Limit container resources
+services:
+  fastapi:
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+```
+
+### Network Configuration
+- Default ports: 3000 (login), 8080 (API), 55679 (metrics)
+- Configure firewall rules if needed
+- Use reverse proxy for production deployment

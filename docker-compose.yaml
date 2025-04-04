@@ -1,29 +1,78 @@
+version: '3.8'
+
 services:
+  modal-login:
+    build:
+      context: ./modal-login
+      dockerfile: Dockerfile
+      target: development
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - NEXT_TELEMETRY_DISABLED=1
+      - NEXTAUTH_URL=http://localhost:3000
+      - NEXT_PUBLIC_ENABLE_TESTNETS=true
+      - WATCHPACK_POLLING=true
+    volumes:
+      - ./modal-login:/app
+      - /app/node_modules
+      - /app/.next
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - swarm-network
+    depends_on:
+      - fastapi
+
   fastapi:
     build:
       context: .
       dockerfile: Dockerfile.webserver
+      target: server
     environment:
       - OTEL_SERVICE_NAME=rlswarm-fastapi
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_PYTHON_LOG_LEVEL=debug
+      - PYTHONUNBUFFERED=1
+      - INITIAL_PEERS=/ip4/127.0.0.1/tcp/8001
     ports:
       - "8080:8000"
+    volumes:
+      - ./web/api:/app/api
+      - ./hivemind_exp:/app/hivemind_exp
+    networks:
+      - swarm-network
     depends_on:
       - otel-collector
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/healthz"]
       interval: 30s
+      timeout: 10s
       retries: 3
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.120.0
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
     ports:
       - "4317:4317"  # OTLP gRPC
       - "4318:4318"  # OTLP HTTP
-      - "55679:55679"  # Prometheus metrics (optional)
+      - "55679:55679"  # Prometheus metrics
     environment:
-      - OTEL_LOG_LEVEL=DEBUG
+      - OTEL_LOG_LEVEL=debug
+    networks:
+      - swarm-network
     healthcheck:
       test: ["CMD", "grpc_health_probe", "-addr=localhost:4317"]
       interval: 5s
+      timeout: 10s
       retries: 5
+
+networks:
+  swarm-network:
+    driver: bridge
